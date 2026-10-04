@@ -1,0 +1,221 @@
+name: Gather Users from Area
+
+on:
+  schedule:
+    - cron: '21 */7 * * *'
+  workflow_dispatch:
+
+# ==========================================
+# ⚙️ EDIT YOUR SCRAPER SETTINGS HERE ⚙️
+# ==========================================
+env:
+  TARGET_START_X: '541505'
+  TARGET_START_Y: '762901'
+  TARGET_END_X: '545465'
+  TARGET_END_Y: '766646'
+  HORIZONTAL_DIVISIONS: '6'
+  VERTICAL_DIVISIONS: '2'
+# ==========================================
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate-matrix.outputs.matrix }}
+    steps:
+      - name: Calculate Grid Coordinates
+        id: generate-matrix
+        env:
+          START_X: ${{ env.TARGET_START_X }}
+          START_Y: ${{ env.TARGET_START_Y }}
+          END_X: ${{ env.TARGET_END_X }}
+          END_Y: ${{ env.TARGET_END_Y }}
+          HORIZONTAL_DIVISIONS: ${{ env.HORIZONTAL_DIVISIONS }}
+          VERTICAL_DIVISIONS: ${{ env.VERTICAL_DIVISIONS }}
+        run: |
+          node -e '
+            const startX = parseInt(process.env.START_X, 10);
+            const startY = parseInt(process.env.START_Y, 10);
+            const endX = parseInt(process.env.END_X, 10);
+            const endY = parseInt(process.env.END_Y, 10);
+            const horizontalDivisions = parseInt(process.env.HORIZONTAL_DIVISIONS, 10);
+            const verticalDivisions = parseInt(process.env.VERTICAL_DIVISIONS, 10);
+
+            const width = Math.floor((endX - startX + 1) / horizontalDivisions);
+            const height = Math.floor((endY - startY + 1) / verticalDivisions);
+            const matrix = { include: [] };
+            
+            for(let i=0; i<horizontalDivisions; i++) {
+              for(let j=0; j<verticalDivisions; j++) {
+                const sx = startX + (i * width);
+                const sy = startY + (j * height);
+                const ex = (i === horizontalDivisions - 1) ? endX : sx + width - 1;
+                const ey = (j === verticalDivisions - 1) ? endY : sy + height - 1;
+                
+                matrix.include.push({
+                  start_x: sx.toString(),
+                  start_y: sy.toString(),
+                  end_x: ex.toString(),
+                  end_y: ey.toString(),
+                  zone: `Sector-${i}-${j}`
+                });
+              }
+            }
+            console.log(`matrix=${JSON.stringify(matrix)}`);
+          ' >> "$GITHUB_OUTPUT"
+
+  scan:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+    
+    name: Scan ${{ matrix.zone }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Restore Global State Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: global-state.json
+          key: global-master-state-v1-${{ github.run_id }}
+          restore-keys: |
+            global-master-state-v1-
+
+      - name: Execute Scraper
+        env:
+          START_X: ${{ matrix.start_x }}
+          START_Y: ${{ matrix.start_y }}
+          END_X: ${{ matrix.end_x }}
+          END_Y: ${{ matrix.end_y }}
+          ZONE_NAME: ${{ matrix.zone }}
+          RUN_DURATION_MINS: '330'
+          TARGET_INTERVAL: '500'
+          MIN_FLOOR: '399'
+        run: node users.js
+
+      - name: Upload Local Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: local-results-${{ matrix.zone }}
+          path: local-results-${{ matrix.zone }}.json
+          retention-days: 1
+
+  merge-results:
+    needs: scan
+    runs-on: ubuntu-latest
+    if: always() 
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Restore Base Global State
+        uses: actions/cache/restore@v4
+        with:
+          path: global-state.json
+          key: global-master-state-v1-${{ github.run_id }}
+          restore-keys: |
+            global-master-state-v1-
+
+      - name: Download all Local Results
+        uses: actions/download-artifact@v4
+        with:
+          path: local-results
+          pattern: local-results-*
+          merge-multiple: true
+
+      - name: Merge States and Generate CSV
+        run: |
+          node -e '
+            const fs = require("fs");
+            
+            let globalState = { users: {}, processed_ranges: {} };
+            if (fs.existsSync("global-state.json")) {
+              globalState = JSON.parse(fs.readFileSync("global-state.json", "utf8"));
+            }
+            
+            // Mathematical function to compress overlapping or adjacent ranges
+            function mergeRanges(ranges1, ranges2) {
+              const combined = [...(ranges1 || []), ...(ranges2 || [])];
+              if (combined.length === 0) return [];
+              
+              combined.sort((a, b) => a[0] - b[0]); // Sort by starting X
+              const merged = [combined[0]];
+              
+              for (let i = 1; i < combined.length; i++) {
+                const last = merged[merged.length - 1];
+                const current = combined[i];
+                // If they touch or overlap (e.g., [0,5] and [6,10] OR [0,5] and [3,8])
+                if (current[0] <= last[1] + 1) {
+                  last[1] = Math.max(last[1], current[1]);
+                } else {
+                  merged.push(current);
+                }
+              }
+              return merged;
+            }
+
+            const files = fs.existsSync("local-results") ? fs.readdirSync("local-results").filter(f => f.endsWith(".json")) : [];
+            for (const file of files) {
+              const localData = JSON.parse(fs.readFileSync(`local-results/${file}`, "utf8"));
+              
+              // 1. Merge the mathematical ranges
+              if (localData.processed_ranges) {
+                for (const [y, rowRanges] of Object.entries(localData.processed_ranges)) {
+                  globalState.processed_ranges[y] = mergeRanges(globalState.processed_ranges[y], rowRanges);
+                }
+              }
+
+              // 2. Merge user counts
+              if (localData.users) {
+                for (const [key, u] of Object.entries(localData.users)) {
+                  if (!globalState.users[key]) {
+                    globalState.users[key] = { username: u.username, discord: u.discord, allianceName: u.allianceName, pixels_painted: 0 };
+                  }
+                  globalState.users[key].pixels_painted += u.pixels_painted;
+                }
+              }
+            }
+
+            fs.writeFileSync("global-state.json", JSON.stringify(globalState));
+
+            const sortedUsers = Object.values(globalState.users).sort((a, b) => b.pixels_painted - a.pixels_painted);
+            
+            const csvLines = ["Wplace Username,Discord Username,Alliance,Pixels Painted"];
+            for (const u of sortedUsers) {
+              const safeName = `"${String(u.username || "").replace(/"/g, '""')}"`;
+              const safeAlliance = `"${String(u.allianceName || "").replace(/"/g, '""')}"`;
+              csvLines.push(`${safeName},${u.discord || ""},${safeAlliance},${u.pixels_painted}`);
+            }
+            fs.writeFileSync("Final-Merged-Results.csv", csvLines.join("\n"));
+            fs.writeFileSync("Final-Merged-Results.json", JSON.stringify(sortedUsers, null, 2));
+          '
+
+      - name: Save Global State Cache
+        uses: actions/cache/save@v4
+        with:
+          path: global-state.json
+          key: global-master-state-v1-${{ github.run_id }}
+
+      - name: Upload Final Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Final-Merged-Results
+          path: |
+            Final-Merged-Results.csv
+            Final-Merged-Results.json
+            global-state.json
+          retention-days: 60
