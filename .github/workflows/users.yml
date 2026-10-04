@@ -9,10 +9,10 @@ on:
 # ⚙️ EDIT YOUR SCRAPER SETTINGS HERE ⚙️
 # ==========================================
 env:
-  TARGET_START_X: '541505'
-  TARGET_START_Y: '762901'
-  TARGET_END_X: '545465'
-  TARGET_END_Y: '766646'
+  TARGET_START_X: '539001'
+  TARGET_START_Y: '759001'
+  TARGET_END_X: '564999'
+  TARGET_END_Y: '769999'
   HORIZONTAL_DIVISIONS: '6'
   VERTICAL_DIVISIONS: '2'
 # ==========================================
@@ -101,7 +101,7 @@ jobs:
           ZONE_NAME: ${{ matrix.zone }}
           RUN_DURATION_MINS: '330'
           TARGET_INTERVAL: '500'
-          MIN_FLOOR: '399'
+          MIN_FLOOR: '209'
         run: node users.js
 
       - name: Upload Local Results
@@ -110,7 +110,7 @@ jobs:
         with:
           name: local-results-${{ matrix.zone }}
           path: local-results-${{ matrix.zone }}.json
-          retention-days: 1
+          retention-days: 90
 
   merge-results:
     needs: scan
@@ -218,4 +218,4 @@ jobs:
             Final-Merged-Results.csv
             Final-Merged-Results.json
             global-state.json
-          retention-days: 60
+          retention-days: 90
