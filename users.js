@@ -12,6 +12,8 @@ const END_X = parseInt(process.env.END_X, 10);
 const END_Y = parseInt(process.env.END_Y, 10);
 const ZONE_NAME = process.env.ZONE_NAME || 'default';
 
+const totalPixels = (END_X - START_X + 1) * (END_Y - START_Y + 1);
+
 const RUN_DURATION_MS = parseEnvInt(process.env.RUN_DURATION_MINS, 330) * 60 * 1000; 
 
 const CFG_TARGET_INTERVAL = parseEnvInt(process.env.TARGET_INTERVAL, 500);
@@ -233,7 +235,7 @@ async function run() {
               }
 
               if (newPixelsScanned % 500 === 0) {
-                log(`Progress: Scanned ${newPixelsScanned} new pixels (Skipped ${skippedPixels} known/blank).`);
+                log(`Progress: Scanned ${newPixelsScanned}, skipped ${skippedPixels} known/blank, total ${totalPixels}. `);
                 fs.writeFileSync(LOCAL_RESULTS_FILE, JSON.stringify(localDiscoveries));
               }
 
