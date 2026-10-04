@@ -1,0 +1,195 @@
+name: Wplace Background Scanner
+
+on:
+  schedule:
+    - cron: '42 */7 * * *'
+
+  workflow_dispatch:
+    inputs:
+      start_x:
+        description: 'Start X (Blank = use saved Target)'
+        required: false
+        type: string
+      start_y:
+        description: 'Start Y (Blank = use saved Target)'
+        required: false
+        type: string
+      end_x:
+        description: 'End X (Blank = use saved Target)'
+        required: false
+        type: string
+      end_y:
+        description: 'End Y (Blank = use saved Target)'
+        required: false
+        type: string
+      grid_size:
+        description: 'Grid divisions (e.g., 2 creates a 2x2 grid with 4 runners)'
+        required: true
+        default: '2'
+        type: string
+      stagger_interval_secs:
+        description: 'Stagger delay between each bot starting (s)'
+        required: false
+        default: '0'
+        type: string
+      run_duration_mins:
+        description: 'Run duration mins'
+        required: false
+        type: string
+      target_interval:
+        description: 'Target Interval (ms)'
+        required: false
+        type: string
+      min_floor:
+        description: 'Min Floor (ms)'
+        required: false
+        type: string
+      pause_sec_429:
+        description: '429 Pause (s)'
+        required: false
+        type: string
+      penalty_ms_429:
+        description: '429 Penalty (+ms)'
+        required: false
+        type: string
+      step_down_ms:
+        description: 'Speed Step (-ms)'
+        required: false
+        type: string
+      streak_reqs:
+        description: 'Streak for Step'
+        required: false
+        type: string
+      total_cycles:
+        description: 'Amount of Cycles'
+        required: false
+        type: string
+      pause_interval_secs:
+        description: 'Pause between Cycles (s)'
+        required: false
+        type: string
+      expansion_algorithm:
+        description: 'Use expansion algortihm?'
+        required: true
+        type: boolean
+      limit_expansion:
+        description: 'Limit expansion to affected tiles?'
+        required: true
+        type: boolean
+      expansion_rate:
+        description: 'If there are too many queue pixels, how often do you want to expand during the normal scan? (0 for none, 1 for always, otherwise every n pixels)'
+        required: false
+        type: string
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate-matrix.outputs.matrix }}
+    steps:
+      - name: Calculate Grid Coordinates
+        id: generate-matrix
+        env:
+          START_X: ${{ vars.TARGET_START_X }}
+          START_Y: ${{ vars.TARGET_START_Y }}
+          END_X: ${{ vars.TARGET_END_X }}
+          END_Y: ${{ vars.TARGET_END_Y }}
+          GRID_SIZE: ${{ inputs.grid_size || vars.GRID_SIZE || '2' }}
+        run: |
+          node -e '
+            const startX = parseInt(process.env.START_X, 10);
+            const startY = parseInt(process.env.START_Y, 10);
+            const endX = parseInt(process.env.END_X, 10);
+            const endY = parseInt(process.env.END_Y, 10);
+            const gridSize = parseInt(process.env.GRID_SIZE, 10);
+
+            const width = Math.floor((endX - startX + 1) / gridSize);
+            const height = Math.floor((endY - startY + 1) / gridSize);
+            const matrix = { include: [] };
+            
+            let jobIndex = 0; // Initialize a counter for the jobs
+
+            for(let i=0; i<gridSize; i++) {
+              for(let j=0; j<gridSize; j++) {
+                const sx = startX + (i * width);
+                const sy = startY + (j * height);
+                const ex = (i === gridSize - 1) ? endX : sx + width - 1;
+                const ey = (j === gridSize - 1) ? endY : sy + height - 1;
+                
+                matrix.include.push({
+                  start_x: sx.toString(),
+                  start_y: sy.toString(),
+                  end_x: ex.toString(),
+                  end_y: ey.toString(),
+                  zone: `Sector ${i}-${j}`,
+                  index: jobIndex.toString() // Add the index to the matrix output
+                });
+                jobIndex++;
+              }
+            }
+            console.log(`matrix=${JSON.stringify(matrix)}`);
+          ' >> "$GITHUB_OUTPUT"
+
+  scan:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # Prevents one failing bot from canceling all other bots
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+    
+    name: Scan ${{ matrix.zone }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Staggered Start Delay
+        env:
+          STAGGER_INTERVAL: ${{ inputs.stagger_interval_secs != '' && inputs.stagger_interval_secs || vars.STAGGER_INTERVAL_SECS || '0' }}
+        run: |
+          # Multiply the interval by the job's unique index
+          DELAY=$(( ${{ matrix.index }} * STAGGER_INTERVAL ))
+          if [ "$DELAY" -gt "0" ]; then
+            echo "Staggering start: Sleeping for $DELAY seconds before executing bot..."
+            sleep $DELAY
+          else
+            echo "No stagger delay required for this job."
+          fi
+
+      - name: Execute Scanner
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          SYNC_SECRET_KEY: ${{ secrets.SYNC_SECRET_KEY }}
+
+          START_X: ${{ matrix.start_x }}
+          START_Y: ${{ matrix.start_y }}
+          END_X: ${{ matrix.end_x }}
+          END_Y: ${{ matrix.end_y }}
+
+          GLOBAL_MIN_X: ${{ inputs.start_x != '' && inputs.start_x || vars.TARGET_START_X }}
+          GLOBAL_MAX_X: ${{ inputs.end_x != '' && inputs.end_x || vars.TARGET_END_X }}
+          GLOBAL_MIN_Y: ${{ inputs.start_y != '' && inputs.start_y || vars.TARGET_START_Y }}
+          GLOBAL_MAX_Y: ${{ inputs.end_y != '' && inputs.end_y || vars.TARGET_END_Y }}
+
+          EXPANSION_ALGORITHM: ${{ inputs.expansion_algorithm != '' && inputs.expansion_algorithm || vars.EXPANSION_ALGORITHM }}
+          LIMIT_EXPANSION: ${{ inputs.limit_expansion != '' && inputs.limit_expansion || vars.LIMIT_EXPANSION }}
+
+          RUN_DURATION_MINS: ${{ inputs.run_duration_mins != '' && inputs.run_duration_mins || vars.RUN_DURATION_MINS || '67'}}
+          PAUSE_INTERVAL_SECS: ${{ inputs.pause_interval_secs != '' && inputs.pause_interval_secs || vars.PAUSE_INTERVAL_SECS || '3' }}
+          TOTAL_CYCLES: ${{ inputs.total_cycles != '' && inputs.total_cycles || vars.TOTAL_CYCLES || '1' }}
+          TARGET_INTERVAL: ${{ inputs.target_interval != '' && inputs.target_interval || vars.TARGET_INTERVAL || '500' }}
+          MIN_FLOOR: ${{ inputs.min_floor != '' && inputs.min_floor || vars.MIN_FLOOR || '399' }}
+          PAUSE_SEC_429: ${{ inputs.pause_sec_429 != '' && inputs.pause_sec_429 || vars.PAUSE_SEC_429 || '321' }}
+          PENALTY_MS_429: ${{ inputs.penalty_ms_429 != '' && inputs.penalty_ms_429 || vars.PENALTY_MS_429 || '500' }}
+          STEP_DOWN_MS: ${{ inputs.step_down_ms != '' && inputs.step_down_ms || vars.STEP_DOWN_MS || '21' }}
+          STREAK_REQS: ${{ inputs.streak_reqs != '' && inputs.streak_reqs || vars.STREAK_REQS || '42' }}
+          FLUSH_INTERVAL: ${{ vars.FLUSH_INTERVAL || '1000' }}
+          EXPANSION_RATE: ${{ inputs.expansion_rate != '' && inputs.expansion_rate || vars.EXPANSION_RATE || '10' }}
+        run: exec node bot.js

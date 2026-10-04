@@ -1,0 +1,11 @@
+{
+    "name": "wplace-cloud-scanner-users",
+    "version": "1.0.0",
+    "type": "module",
+    "scripts": {
+      "start": "node users.js"
+    },
+    "dependencies": {
+      "pngjs": "^7.0.0"
+    }
+  }
