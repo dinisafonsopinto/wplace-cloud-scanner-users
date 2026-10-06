@@ -18,7 +18,6 @@ if (ZONE_NAME === 'DONE') {
 }
 
 const totalPixels = (END_X - START_X + 1) * (END_Y - START_Y + 1);
-
 const RUN_DURATION_MS = parseEnvInt(process.env.RUN_DURATION_MINS, 330) * 60 * 1000; 
 
 const CFG_TARGET_INTERVAL = parseEnvInt(process.env.TARGET_INTERVAL, 400);
@@ -109,8 +108,6 @@ async function fetchPixelOfficial(tileX, tileY, pixelX, pixelY) {
   }
 }
 
-// Determines if a specific pixel meets the step interval for the current iteration level,
-// while skipping pixels already scanned perfectly inside previous lower levels.
 function isPixelForLevel(x, y, lvl) {
   if (lvl > 8) return false; 
   if (lvl === 1) return (x % 128 === 0) && (y % 128 === 0);
@@ -153,12 +150,12 @@ async function run() {
     }
   }
 
-  const currentLevel = zoneProgress.level || 1;
+  let currentLevel = zoneProgress.level || 1;
 
   const localDiscoveries = { 
     zone: ZONE_NAME,
-    level: currentLevel,
-    level_complete: false,
+    completed_levels: [],
+    current_level: currentLevel,
     scanned_count: 0,
     users: {}, 
     ranges: {} 
@@ -190,104 +187,118 @@ async function run() {
 
   log(`- Scanned - | - Skipped - | - Total - | - Level -`)
 
-  for (let ty = startTileY; ty <= endTileY; ty++) {
-    for (let tx = startTileX; tx <= endTileX; tx++) {
-      
-      const tMinX = Math.max(minX, tx * TILE_SIZE);
-      const tMaxX = Math.min(maxX, (tx + 1) * TILE_SIZE - 1);
-      const tMinY = Math.max(minY, ty * TILE_SIZE);
-      const tMaxY = Math.min(maxY, (ty + 1) * TILE_SIZE - 1);
+  while (currentLevel <= 8 && !isShuttingDown) {
+    let levelFinishedCompletely = true;
+    
+    // Only apply global ranges if we are on the level that the global state left off on.
+    // If we leveled up locally, global ranges no longer apply to this new level.
+    const activeGlobalRanges = (currentLevel === zoneProgress.level) ? zoneProgress.ranges : {};
 
-      for (let y = tMinY; y <= tMaxY; y++) {
-        for (let x = tMinX; x <= tMaxX; x++) {
-          if (isShuttingDown) break;
-          
-          if (!isPixelForLevel(x, y, currentLevel)) continue;
+    for (let ty = startTileY; ty <= endTileY; ty++) {
+      for (let tx = startTileX; tx <= endTileX; tx++) {
+        
+        const tMinX = Math.max(minX, tx * TILE_SIZE);
+        const tMaxX = Math.min(maxX, (tx + 1) * TILE_SIZE - 1);
+        const tMinY = Math.max(minY, ty * TILE_SIZE);
+        const tMaxY = Math.min(maxY, (ty + 1) * TILE_SIZE - 1);
 
-          if (Date.now() - runStartTime >= RUN_DURATION_MS) {
-            log(`5.5 hour limit reached. Yielding runner...`, 'warn');
-            isShuttingDown = true;
-            break;
-          }
+        for (let y = tMinY; y <= tMaxY; y++) {
+          for (let x = tMinX; x <= tMaxX; x++) {
+            if (isShuttingDown) { levelFinishedCompletely = false; break; }
+            
+            if (!isPixelForLevel(x, y, currentLevel)) continue;
 
-          if (isProcessedGlobal(x, y, zoneProgress.ranges)) {
-            skippedPixels++;
-            continue;
-          }
+            if (Date.now() - runStartTime >= RUN_DURATION_MS) {
+              log(`Time limit reached. Yielding runner...`, 'warn');
+              isShuttingDown = true;
+              levelFinishedCompletely = false;
+              break;
+            }
 
-          const { tileX, tileY, pixelX, pixelY } = getCoords(x, y);
-
-          try {
-            const png = await getTileImage(tileX, tileY);
-            if (isPixelBlank(png, pixelX, pixelY)) {
-              markProcessedLocal(x, y);
+            if (isProcessedGlobal(x, y, activeGlobalRanges)) {
               skippedPixels++;
-              continue; 
+              continue;
             }
-          } catch (err) {
-            log(`Failed to load tile image to verify pixel (${x}, ${y}): ${err.message}. Assuming painted.`, 'warn');
-          }
 
-          let resolved = false;
-          const reqStart = Date.now();
+            const { tileX, tileY, pixelX, pixelY } = getCoords(x, y);
 
-          while (!resolved && !isShuttingDown) {
-            const res = await fetchPixelOfficial(tileX, tileY, pixelX, pixelY);
-            const duration = Date.now() - reqStart;
+            try {
+              const png = await getTileImage(tileX, tileY);
+              if (isPixelBlank(png, pixelX, pixelY)) {
+                markProcessedLocal(x, y);
+                skippedPixels++;
+                continue; 
+              }
+            } catch (err) {
+              log(`Failed to load tile map (${x}, ${y}): ${err.message}. Assuming painted.`, 'warn');
+            }
 
-            if (res.success) {
-              consecutiveSuccesses++;
-              resolved = true;
-              
-              if (res.username !== 'Blank / Unknown') {
-                const key = res.discord || res.username;
-                if (!localDiscoveries.users[key]) {
-                  localDiscoveries.users[key] = { 
-                    username: res.username, discord: res.discord, allianceName: res.allianceName, pixels_painted: 0 
-                  };
+            let resolved = false;
+            const reqStart = Date.now();
+
+            while (!resolved && !isShuttingDown) {
+              const res = await fetchPixelOfficial(tileX, tileY, pixelX, pixelY);
+              const duration = Date.now() - reqStart;
+
+              if (res.success) {
+                consecutiveSuccesses++;
+                resolved = true;
+                
+                if (res.username !== 'Blank / Unknown') {
+                  const key = res.discord || res.username;
+                  if (!localDiscoveries.users[key]) {
+                    localDiscoveries.users[key] = { 
+                      username: res.username, discord: res.discord, allianceName: res.allianceName, pixels_painted: 0 
+                    };
+                  }
+                  localDiscoveries.users[key].pixels_painted++;
                 }
-                localDiscoveries.users[key].pixels_painted++;
+                
+                markProcessedLocal(x, y);
+                newPixelsScanned++;
+
+                if (CFG_STEP_DOWN_MS > 0 && consecutiveSuccesses >= CFG_STREAK_REQS && targetInterval > minFloor) {
+                  targetInterval = Math.max(minFloor, targetInterval - CFG_STEP_DOWN_MS);
+                }
+
+                if (newPixelsScanned % 100 === 0) {
+                  log(`${newPixelsScanned.toString().padStart(12, ' ')}|${skippedPixels.toString().padStart(13, ' ')}|${totalPixels.toString().padStart(11, ' ')}|${currentLevel.toString().padStart(10, ' ')}`);
+                  fs.writeFileSync(LOCAL_RESULTS_FILE, JSON.stringify(localDiscoveries));
+                }
+
+                const sleepRemaining = Math.max(0, targetInterval - duration);
+                if (sleepRemaining > 0) await wait(sleepRemaining, shutdownController.signal);
+
+              } else if (res.status === 429) {
+                consecutiveSuccesses = 0;
+                minFloor = Math.max(minFloor, targetInterval + Math.max(10, CFG_STEP_DOWN_MS));
+                targetInterval += CFG_PENALTY_MS_429;
+                log(`Rate limited! Pausing for ${CFG_PAUSE_SEC_429}s...`, 'warn');
+                await wait(CFG_PAUSE_SEC_429 * 1000, shutdownController.signal);
+              } else {
+                log(`HTTP ${res.status}. Retrying in 10s...`, 'error');
+                consecutiveSuccesses = 0;
+                targetInterval += Math.ceil(CFG_STEP_DOWN_MS);
+                await wait(10000, shutdownController.signal);
               }
-              
-              markProcessedLocal(x, y);
-              newPixelsScanned++;
-
-              if (CFG_STEP_DOWN_MS > 0 && consecutiveSuccesses >= CFG_STREAK_REQS && targetInterval > minFloor) {
-                targetInterval = Math.max(minFloor, targetInterval - CFG_STEP_DOWN_MS);
-              }
-
-              if (newPixelsScanned % 250 === 0) {
-                log(`${newPixelsScanned.toString().padStart(12, ' ')}|${skippedPixels.toString().padStart(13, ' ')}|${totalPixels.toString().padStart(11, ' ')}|${currentLevel.toString().padStart(10, ' ')}`);
-                fs.writeFileSync(LOCAL_RESULTS_FILE, JSON.stringify(localDiscoveries));
-              }
-
-              const sleepRemaining = Math.max(0, targetInterval - duration);
-              if (sleepRemaining > 0) await wait(sleepRemaining, shutdownController.signal);
-
-            } else if (res.status === 429) {
-              consecutiveSuccesses = 0;
-              minFloor = Math.max(minFloor, targetInterval + Math.max(10, CFG_STEP_DOWN_MS));
-              targetInterval += CFG_PENALTY_MS_429;
-              log(`Rate limited! Pausing for ${CFG_PAUSE_SEC_429}s...`, 'warn');
-              await wait(CFG_PAUSE_SEC_429 * 1000, shutdownController.signal);
-            } else {
-              log(`HTTP ${res.status}. Retrying in 10s...`, 'error');
-              consecutiveSuccesses = 0;
-              targetInterval += Math.ceil(CFG_STEP_DOWN_MS);
-              await wait(10000, shutdownController.signal);
             }
           }
+          if (isShuttingDown) break;
         }
         if (isShuttingDown) break;
       }
       if (isShuttingDown) break;
     }
-    if (isShuttingDown) break;
-  }
 
-  if (!isShuttingDown) {
-    localDiscoveries.level_complete = true;
-    log(`Level ${currentLevel} completely scanned for zone ${ZONE_NAME}! It will be leveled up by the merger.`, 'success');
+    if (levelFinishedCompletely && !isShuttingDown) {
+      log(`Level ${currentLevel} completely scanned for zone ${ZONE_NAME}! Advancing to Level ${currentLevel + 1}...`, 'success');
+      localDiscoveries.completed_levels.push(currentLevel);
+      currentLevel++;
+      localDiscoveries.current_level = currentLevel;
+      localDiscoveries.ranges = {};
+      localDiscoveries.scanned_count = 0;
+      fs.writeFileSync(LOCAL_RESULTS_FILE, JSON.stringify(localDiscoveries));
+    }
   }
 
   fs.writeFileSync(LOCAL_RESULTS_FILE, JSON.stringify(localDiscoveries));

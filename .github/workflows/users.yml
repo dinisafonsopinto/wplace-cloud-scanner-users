@@ -55,7 +55,6 @@ jobs:
             const endY = parseInt(process.env.END_Y, 10);
             const runners = parseInt(process.env.CONCURRENT_RUNNERS, 10) || 5;
 
-            // Mapped exactly to the provided image boundaries
             const grid = [
               [null,   null,    null,    "GR7",   "GR8",  "GS301", null,    null,    null,   null    ],
               [null,   null,    null,    "GR10",  "GR11", "LAN1 ", "GS307", null,    null,   null    ],
@@ -88,7 +87,7 @@ jobs:
             for(let j=0; j<rows; j++) {
               for(let i=0; i<cols; i++) {
                 const zone = grid[j][i];
-                if (!zone) continue; // Allows for non-rectangular scan areas
+                if (!zone) continue; 
                 
                 const sx = startX + (i * width);
                 const sy = startY + (j * height);
@@ -96,9 +95,8 @@ jobs:
                 const ey = (j === rows - 1) ? endY : sy + height - 1;
                 
                 const zp = globalState.zone_progress?.[zone] || { level: 1, scanned: 0 };
-                if (zp.level > 8) continue; // Completely scanned all levels!
+                if (zp.level > 8) continue;
                 
-                // Calculate how behind this region is to prioritize runners to it
                 const score = (zp.level * 1000000) + zp.scanned;
                 
                 regions.push({ start_x: sx.toString(), start_y: sy.toString(), end_x: ex.toString(), end_y: ey.toString(), zone: zone, score: score });
@@ -108,7 +106,6 @@ jobs:
             regions.sort((a, b) => a.score - b.score);
             const topN = regions.slice(0, runners);
             
-            // Fallback for when entire map is finished to prevent GHA matrix crash
             if (topN.length === 0) {
               topN.push({ start_x: startX.toString(), start_y: startY.toString(), end_x: startX.toString(), end_y: startY.toString(), zone: "DONE" });
             }
@@ -230,23 +227,27 @@ jobs:
               }
               const zp = globalState.zone_progress[zone];
 
-              // Merge ranges ONLY if the local result matches the region current level securely
-              if (localData.level === zp.level) {
+              // 1. If the runner finished any levels, advance the global state accordingly
+              if (localData.completed_levels && localData.completed_levels.length > 0) {
+                const maxCompleted = Math.max(...localData.completed_levels);
+                if (maxCompleted >= zp.level) {
+                  zp.level = maxCompleted + 1;
+                  zp.ranges = {}; // Dump old level processed pixels
+                  zp.scanned = 0;
+                }
+              }
+
+              // 2. Add mid-level progress for whatever level the runner stopped on
+              if (localData.current_level === zp.level) {
                 if (localData.ranges) {
                   for (const [y, rowRanges] of Object.entries(localData.ranges)) {
                     zp.ranges[y] = mergeRanges(zp.ranges[y], rowRanges);
                   }
                 }
                 zp.scanned += (localData.scanned_count || 0);
-
-                if (localData.level_complete) {
-                  zp.level += 1;
-                  zp.ranges = {}; // Reset processed pixels for the new level
-                  zp.scanned = 0;
-                }
               }
 
-              // Merge users grouped by regions
+              // 3. Merge discovered users (users accumulate safely across all levels)
               if (localData.users) {
                 for (const [key, u] of Object.entries(localData.users)) {
                   if (!globalState.users[key]) {
