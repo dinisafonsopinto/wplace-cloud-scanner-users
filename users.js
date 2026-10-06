@@ -188,6 +188,8 @@ async function run() {
   const startTileY = Math.floor(minY / TILE_SIZE);
   const endTileY = Math.floor(maxY / TILE_SIZE);
 
+  log(`- Scanned - | - Skipped - | - Total - | - Level -`)
+
   for (let ty = startTileY; ty <= endTileY; ty++) {
     for (let tx = startTileX; tx <= endTileX; tx++) {
       
@@ -229,8 +231,6 @@ async function run() {
           let resolved = false;
           const reqStart = Date.now();
 
-          log(`- Scanned - | - Skipped - | - Total - | - Level -`)
-
           while (!resolved && !isShuttingDown) {
             const res = await fetchPixelOfficial(tileX, tileY, pixelX, pixelY);
             const duration = Date.now() - reqStart;
@@ -256,7 +256,7 @@ async function run() {
                 targetInterval = Math.max(minFloor, targetInterval - CFG_STEP_DOWN_MS);
               }
 
-              if (newPixelsScanned % 500 === 0) {
+              if (newPixelsScanned % 250 === 0) {
                 log(`${newPixelsScanned.toString().padStart(12, ' ')}|${skippedPixels.toString().padStart(13, ' ')}|${totalPixels.toString().padStart(11, ' ')}|${currentLevel.toString().padStart(10, ' ')}`);
                 fs.writeFileSync(LOCAL_RESULTS_FILE, JSON.stringify(localDiscoveries));
               }

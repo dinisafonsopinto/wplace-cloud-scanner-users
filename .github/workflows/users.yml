@@ -57,20 +57,20 @@ jobs:
 
             // Mapped exactly to the provided image boundaries
             const grid = [
-              [null, null, null, "GR 7", "GR 8", "GS 301", null, null, null],
-              [null, null, null, "GR 10", "GR 11", "LAN 1", "GS 307", null, null],
-              [null, null, null, "GR 13", "GR 14", "GR 15", "SH 1", "SH 2", null],
-              [null, null, null, "GR 16", "GR 17", "GR 18", "SH 3", "SH 4", "LON 6"],
-              [null, null, null, "GR 19", "GR 20", "GR 21", "SH 5", "SH 6", "LON 9"],
-              [null, null, null, "GR 22", "GR 23", "LAN 2", "SH 7", "WAR 1", "WAR 2"],
-              [null, null, null, "GR 24", "FW 1", "ANN 1", "ANN 2", "DET 1", "CEL 1"],
-              ["CHI 8", "SB 1", "FW 2", "TOL 1", "TOL 2", "WIN 1", "CLE 4", "CLE 5", "CLE 6"],
-              ["CHI 10", "FW 3", "FW 4", "TOL 3", "TOL 4", "TOL 5", "CLE 7", "CLE 8", "CLE 9"],
-              ["CHI 12", "IND 1", "IND 2", "FW 5", "TOL 6", "TOL 7", "CLE 10", "COL 1", "PIT 6"],
-              ["IND 4", "IND 5", "IND 6", "FW 6", "COL 2", "COL 3", "COL 4", "COL 5", "PIT 11"],
-              ["IND 9", "IND 10", "IND 11", "CIN 1", "CIN 2", "COL 6", "IRO 1", "IRO 2", "PIT 16"],
-              ["IND 13", "IND 14", "IND 15", "CIN 3", "CIN 4", "CIN 5", "IRO 3", "IRO 4", null],
-              ["EVA 2", "LOU 1", "LOU 2", "LOU 3", null, null, null, null, null]
+              [null,   null,    null,    "GR7",   "GR8",  "GS301", null,    null,    null,   null    ],
+              [null,   null,    null,    "GR10",  "GR11", "LAN1 ", "GS307", null,    null,   null    ],
+              [null,   null,    "GR13",  "GR14",  "GR15", "SH1",   "SH2",   null,    null,   null    ],
+              [null,   null,    "GR16",  "GR17",  "GR18", "SH3",   "SH4",   "LON6",  null,   null    ],
+              [null,   null,    "GR19",  "GR20",  "GR21", "SH5",   "SH6",   "LON9",  null,   null    ],
+              [null,   null,    "GR22",  "GR23",  "LAN2", "SH7",   "WAR1",  "WAR2",  null,   null    ],
+              [null,   null,    "GR24",  "FW1",   "ANN1", "ANN2",  "DET1",  "CEL1",  null,   null    ],
+              [null,   "CHI8",  "SB1",   "FW2",   "TOL1", "TOL2",  "WIN1",  "CLE4",  "CLE5", "CLE6"  ],
+              [null,   "CHI10", "FW3",   "FW4",   "TOL3", "TOL4",  "TOL5",  "CLE7",  "CLE8", "CLE9"  ],
+              [null,   "CHI12", "IND1",  "IND2",  "FW5",  "TOL6",  "TOL7",  "CLE10", "COL1", "PIT6"  ],
+              [null,   "IND4",  "IND5",  "IND6",  "FW6",  "COL2",  "COL3",  "COL4",  "COL5", "PIT11" ],
+              [null,   "IND9",  "IND10", "IND11", "CIN1", "CIN2",  "COL6",  "IRO1",  "IRO2", "PIT16" ],
+              [null,   "IND13", "IND14", "IND15", "CIN3", "CIN4",  "CIN5",  "IRO3",  "IRO4", null    ],
+              ["EVA2", "LOU1",  "LOU2",  "LOU3",  null,   null,    null,    null,    null,   null    ]
             ];
 
             const cols = 9;
