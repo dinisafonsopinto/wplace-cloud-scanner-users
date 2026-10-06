@@ -148,9 +148,9 @@ jobs:
           END_X: ${{ matrix.end_x }}
           END_Y: ${{ matrix.end_y }}
           ZONE_NAME: ${{ matrix.zone }}
-          RUN_DURATION_MINS: '330'
-          TARGET_INTERVAL: '500'
-          MIN_FLOOR: '209'
+          RUN_DURATION_MINS: '342'
+          TARGET_INTERVAL: '230'
+          MIN_FLOOR: '203'
         run: node users.js
 
       - name: Upload Local Results
