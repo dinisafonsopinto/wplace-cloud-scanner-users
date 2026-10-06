@@ -12,14 +12,19 @@ const END_X = parseInt(process.env.END_X, 10);
 const END_Y = parseInt(process.env.END_Y, 10);
 const ZONE_NAME = process.env.ZONE_NAME || 'default';
 
+if (ZONE_NAME === 'DONE') {
+  console.log('✅ All zones and levels completely scanned!');
+  process.exit(0);
+}
+
 const totalPixels = (END_X - START_X + 1) * (END_Y - START_Y + 1);
 
 const RUN_DURATION_MS = parseEnvInt(process.env.RUN_DURATION_MINS, 330) * 60 * 1000; 
 
-const CFG_TARGET_INTERVAL = parseEnvInt(process.env.TARGET_INTERVAL, 500);
-const CFG_MIN_FLOOR = parseEnvInt(process.env.MIN_FLOOR, 399);
+const CFG_TARGET_INTERVAL = parseEnvInt(process.env.TARGET_INTERVAL, 400);
+const CFG_MIN_FLOOR = parseEnvInt(process.env.MIN_FLOOR, 210);
 const CFG_PAUSE_SEC_429 = parseEnvInt(process.env.PAUSE_SEC_429, 321);
-const CFG_PENALTY_MS_429 = parseEnvInt(process.env.PENALTY_MS_429, 500);
+const CFG_PENALTY_MS_429 = parseEnvInt(process.env.PENALTY_MS_429, 400);
 const CFG_STEP_DOWN_MS = parseEnvInt(process.env.STEP_DOWN_MS, 21);
 const CFG_STREAK_REQS = parseEnvInt(process.env.STREAK_REQS, 42);
 
@@ -54,13 +59,11 @@ const wait = (ms, signal = null) => new Promise((resolve) => {
   if (signal) signal.addEventListener('abort', onAbort, { once: true });
 });
 
-// --- Memory-Efficient Tile Cache ---
 const tileCache = new Map();
 async function getTileImage(tileX, tileY) {
   const key = `${tileX}_${tileY}`;
   if (tileCache.has(key)) return tileCache.get(key);
 
-  // Because of Tile-First traversal, we actually only need 1 tile in memory at a time!
   if (tileCache.size >= 2) {
     const firstKey = tileCache.keys().next().value;
     tileCache.delete(firstKey);
@@ -83,7 +86,6 @@ function isPixelBlank(png, pixelX, pixelY) {
   return png.data[idx + 3] === 0;
 }
 
-// --- Official API Request ---
 async function fetchPixelOfficial(tileX, tileY, pixelX, pixelY) {
   const url = `https://backend.wplace.live/s0/pixel/${tileX}/${tileY}?x=${pixelX}&y=${pixelY}`;
   try {
@@ -107,11 +109,21 @@ async function fetchPixelOfficial(tileX, tileY, pixelX, pixelY) {
   }
 }
 
-// --- High-Performance Range Checking ---
-function isProcessedGlobal(x, y, globalRanges) {
-  const rowRanges = globalRanges[y];
+// Determines if a specific pixel meets the step interval for the current iteration level,
+// while skipping pixels already scanned perfectly inside previous lower levels.
+function isPixelForLevel(x, y, lvl) {
+  if (lvl > 8) return false; 
+  if (lvl === 1) return (x % 128 === 0) && (y % 128 === 0);
+  
+  const step = 128 / Math.pow(2, lvl - 1);
+  const prevStep = 128 / Math.pow(2, lvl - 2);
+  
+  return (x % step === 0) && (y % step === 0) && !((x % prevStep === 0) && (y % prevStep === 0));
+}
+
+function isProcessedGlobal(x, y, ranges) {
+  const rowRanges = ranges[y];
   if (!rowRanges) return false;
-  // Check if X falls inside any of the already processed [start, end] ranges for this Y row
   for (const [start, end] of rowRanges) {
     if (x >= start && x <= end) return true;
   }
@@ -128,42 +140,49 @@ async function run() {
   const maxY = Math.max(START_Y, END_Y);
   const runStartTime = Date.now();
 
-  let globalRanges = {};
+  let zoneProgress = { level: 1, scanned: 0, ranges: {} };
   if (fs.existsSync(GLOBAL_STATE_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(GLOBAL_STATE_FILE, 'utf8'));
-      globalRanges = data.processed_ranges || {};
-      log(`Restored global state using Range compression.`);
+      if (data.zone_progress && data.zone_progress[ZONE_NAME]) {
+        zoneProgress = data.zone_progress[ZONE_NAME];
+        log(`Restored global state for region. Resuming level ${zoneProgress.level}.`);
+      }
     } catch (err) {
-      log(`Failed to parse global state: ${err.message}. Assuming empty.`, 'warn');
+      log(`Failed to parse global state. Assuming empty.`, 'warn');
     }
   }
 
-  const localDiscoveries = { users: {}, processed_ranges: {} };
+  const currentLevel = zoneProgress.level || 1;
+
+  const localDiscoveries = { 
+    zone: ZONE_NAME,
+    level: currentLevel,
+    level_complete: false,
+    scanned_count: 0,
+    users: {}, 
+    ranges: {} 
+  };
+  
   let newPixelsScanned = 0;
   let skippedPixels = 0;
 
   function markProcessedLocal(x, y) {
-    if (!localDiscoveries.processed_ranges[y]) {
-      localDiscoveries.processed_ranges[y] = [];
-    }
-    const row = localDiscoveries.processed_ranges[y];
+    if (!localDiscoveries.ranges[y]) localDiscoveries.ranges[y] = [];
+    const row = localDiscoveries.ranges[y];
     
-    // If this pixel is adjacent to the last range we recorded, just extend the range (+1 to end limit)
     if (row.length > 0 && row[row.length - 1][1] === x - 1) {
       row[row.length - 1][1] = x;
     } else {
-      // Otherwise, create a new standalone range point
       row.push([x, x]);
     }
+    localDiscoveries.scanned_count++;
   }
 
   let targetInterval = CFG_TARGET_INTERVAL;
   let minFloor = CFG_MIN_FLOOR;
   let consecutiveSuccesses = 0;
 
-  // --- TILE-FIRST TRAVERSAL (Massive Optimization) ---
-  // Calculates the tiles we need to visit, so we clear an entire tile before moving to the next.
   const startTileX = Math.floor(minX / TILE_SIZE);
   const endTileX = Math.floor(maxX / TILE_SIZE);
   const startTileY = Math.floor(minY / TILE_SIZE);
@@ -172,7 +191,6 @@ async function run() {
   for (let ty = startTileY; ty <= endTileY; ty++) {
     for (let tx = startTileX; tx <= endTileX; tx++) {
       
-      // Determine exact scanning boundaries inside THIS specific tile
       const tMinX = Math.max(minX, tx * TILE_SIZE);
       const tMaxX = Math.min(maxX, (tx + 1) * TILE_SIZE - 1);
       const tMinY = Math.max(minY, ty * TILE_SIZE);
@@ -181,20 +199,22 @@ async function run() {
       for (let y = tMinY; y <= tMaxY; y++) {
         for (let x = tMinX; x <= tMaxX; x++) {
           if (isShuttingDown) break;
+          
+          if (!isPixelForLevel(x, y, currentLevel)) continue;
+
           if (Date.now() - runStartTime >= RUN_DURATION_MS) {
             log(`5.5 hour limit reached. Yielding runner...`, 'warn');
             isShuttingDown = true;
             break;
           }
 
-          if (isProcessedGlobal(x, y, globalRanges)) {
+          if (isProcessedGlobal(x, y, zoneProgress.ranges)) {
             skippedPixels++;
             continue;
           }
 
           const { tileX, tileY, pixelX, pixelY } = getCoords(x, y);
 
-          // Skip Blank Pixels using Image map
           try {
             const png = await getTileImage(tileX, tileY);
             if (isPixelBlank(png, pixelX, pixelY)) {
@@ -208,6 +228,8 @@ async function run() {
 
           let resolved = false;
           const reqStart = Date.now();
+
+          log(`- Scanned - | - Skipped - | - Total - | - Level -`)
 
           while (!resolved && !isShuttingDown) {
             const res = await fetchPixelOfficial(tileX, tileY, pixelX, pixelY);
@@ -235,7 +257,7 @@ async function run() {
               }
 
               if (newPixelsScanned % 500 === 0) {
-                log(`Progress: Scanned ${newPixelsScanned}, skipped ${skippedPixels} known/blank, total ${totalPixels}. `);
+                log(`${newPixelsScanned.toString().padStart(12, ' ')}|${skippedPixels.toString().padStart(13, ' ')}|${totalPixels.toString().padStart(11, ' ')}|${currentLevel.toString().padStart(10, ' ')}`);
                 fs.writeFileSync(LOCAL_RESULTS_FILE, JSON.stringify(localDiscoveries));
               }
 
@@ -261,6 +283,11 @@ async function run() {
       if (isShuttingDown) break;
     }
     if (isShuttingDown) break;
+  }
+
+  if (!isShuttingDown) {
+    localDiscoveries.level_complete = true;
+    log(`Level ${currentLevel} completely scanned for zone ${ZONE_NAME}! It will be leveled up by the merger.`, 'success');
   }
 
   fs.writeFileSync(LOCAL_RESULTS_FILE, JSON.stringify(localDiscoveries));

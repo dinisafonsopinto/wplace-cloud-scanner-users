@@ -1,20 +1,23 @@
-name: Gather Users from Area
+name: Gather Users from Area 2.0
 
 on:
   schedule:
-    - cron: '21 */7 * * *'
+    - cron: '23 */6 * * *'
   workflow_dispatch:
+    inputs:
+      CONCURRENT_RUNNERS:
+        type: number
+        default: 12
 
 # ==========================================
 # ⚙️ EDIT YOUR SCRAPER SETTINGS HERE ⚙️
 # ==========================================
 env:
-  TARGET_START_X: '539001'
-  TARGET_START_Y: '759001'
+  TARGET_START_X: '523001'
+  TARGET_START_Y: '731001'
   TARGET_END_X: '564999'
-  TARGET_END_Y: '769999'
-  HORIZONTAL_DIVISIONS: '6'
-  VERTICAL_DIVISIONS: '2'
+  TARGET_END_Y: '789999'
+  CONCURRENT_RUNNERS: ${{ inputs.CONCURRENT_RUNNERS || vars.CONCURRENT_RUNNERS || 10 }}
 # ==========================================
 
 jobs:
@@ -23,6 +26,14 @@ jobs:
     outputs:
       matrix: ${{ steps.generate-matrix.outputs.matrix }}
     steps:
+      - name: Restore Global State Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: global-state.json
+          key: global-master-state-v1-${{ github.run_id }}
+          restore-keys: |
+            global-master-state-v1-
+
       - name: Calculate Grid Coordinates
         id: generate-matrix
         env:
@@ -30,37 +41,75 @@ jobs:
           START_Y: ${{ env.TARGET_START_Y }}
           END_X: ${{ env.TARGET_END_X }}
           END_Y: ${{ env.TARGET_END_Y }}
-          HORIZONTAL_DIVISIONS: ${{ env.HORIZONTAL_DIVISIONS }}
-          VERTICAL_DIVISIONS: ${{ env.VERTICAL_DIVISIONS }}
+          CONCURRENT_RUNNERS: ${{ env.CONCURRENT_RUNNERS }}
         run: |
           node -e '
+            const fs = require("fs");
             const startX = parseInt(process.env.START_X, 10);
             const startY = parseInt(process.env.START_Y, 10);
             const endX = parseInt(process.env.END_X, 10);
             const endY = parseInt(process.env.END_Y, 10);
-            const horizontalDivisions = parseInt(process.env.HORIZONTAL_DIVISIONS, 10);
-            const verticalDivisions = parseInt(process.env.VERTICAL_DIVISIONS, 10);
+            const runners = parseInt(process.env.CONCURRENT_RUNNERS, 10) || 5;
 
-            const width = Math.floor((endX - startX + 1) / horizontalDivisions);
-            const height = Math.floor((endY - startY + 1) / verticalDivisions);
-            const matrix = { include: [] };
+            // Mapped exactly to the provided image boundaries
+            const grid = [
+              [null, null, null, "GR 7", "GR 8", "GS 301", null, null, null],
+              [null, null, null, "GR 10", "GR 11", "LAN 1", "GS 307", null, null],
+              [null, null, null, "GR 13", "GR 14", "GR 15", "SH 1", "SH 2", null],
+              [null, null, null, "GR 16", "GR 17", "GR 18", "SH 3", "SH 4", "LON 6"],
+              [null, null, null, "GR 19", "GR 20", "GR 21", "SH 5", "SH 6", "LON 9"],
+              [null, null, null, "GR 22", "GR 23", "LAN 2", "SH 7", "WAR 1", "WAR 2"],
+              [null, null, null, "GR 24", "FW 1", "ANN 1", "ANN 2", "DET 1", "CEL 1"],
+              ["CHI 8", "SB 1", "FW 2", "TOL 1", "TOL 2", "WIN 1", "CLE 4", "CLE 5", "CLE 6"],
+              ["CHI 10", "FW 3", "FW 4", "TOL 3", "TOL 4", "TOL 5", "CLE 7", "CLE 8", "CLE 9"],
+              ["CHI 12", "IND 1", "IND 2", "FW 5", "TOL 6", "TOL 7", "CLE 10", "COL 1", "PIT 6"],
+              ["IND 4", "IND 5", "IND 6", "FW 6", "COL 2", "COL 3", "COL 4", "COL 5", "PIT 11"],
+              ["IND 9", "IND 10", "IND 11", "CIN 1", "CIN 2", "COL 6", "IRO 1", "IRO 2", "PIT 16"],
+              ["IND 13", "IND 14", "IND 15", "CIN 3", "CIN 4", "CIN 5", "IRO 3", "IRO 4", null],
+              ["EVA 2", "LOU 1", "LOU 2", "LOU 3", null, null, null, null, null]
+            ];
+
+            const cols = 9;
+            const rows = 14;
+            const width = Math.floor((endX - startX + 1) / cols);
+            const height = Math.floor((endY - startY + 1) / rows);
             
-            for(let i=0; i<horizontalDivisions; i++) {
-              for(let j=0; j<verticalDivisions; j++) {
+            let globalState = { zone_progress: {} };
+            if (fs.existsSync("global-state.json")) {
+              try { globalState = JSON.parse(fs.readFileSync("global-state.json", "utf8")); } catch(e) {}
+            }
+            
+            const regions = [];
+            
+            for(let j=0; j<rows; j++) {
+              for(let i=0; i<cols; i++) {
+                const zone = grid[j][i];
+                if (!zone) continue; // Allows for non-rectangular scan areas
+                
                 const sx = startX + (i * width);
                 const sy = startY + (j * height);
-                const ex = (i === horizontalDivisions - 1) ? endX : sx + width - 1;
-                const ey = (j === verticalDivisions - 1) ? endY : sy + height - 1;
+                const ex = (i === cols - 1) ? endX : sx + width - 1;
+                const ey = (j === rows - 1) ? endY : sy + height - 1;
                 
-                matrix.include.push({
-                  start_x: sx.toString(),
-                  start_y: sy.toString(),
-                  end_x: ex.toString(),
-                  end_y: ey.toString(),
-                  zone: `Sector-${i}-${j}`
-                });
+                const zp = globalState.zone_progress?.[zone] || { level: 1, scanned: 0 };
+                if (zp.level > 8) continue; // Completely scanned all levels!
+                
+                // Calculate how behind this region is to prioritize runners to it
+                const score = (zp.level * 1000000) + zp.scanned;
+                
+                regions.push({ start_x: sx.toString(), start_y: sy.toString(), end_x: ex.toString(), end_y: ey.toString(), zone: zone, score: score });
               }
             }
+            
+            regions.sort((a, b) => a.score - b.score);
+            const topN = regions.slice(0, runners);
+            
+            // Fallback for when entire map is finished to prevent GHA matrix crash
+            if (topN.length === 0) {
+              topN.push({ start_x: startX.toString(), start_y: startY.toString(), end_x: startX.toString(), end_y: startY.toString(), zone: "DONE" });
+            }
+            
+            const matrix = { include: topN.map(r => ({ start_x: r.start_x, start_y: r.start_y, end_x: r.end_x, end_y: r.end_y, zone: r.zone })) };
             console.log(`matrix=${JSON.stringify(matrix)}`);
           ' >> "$GITHUB_OUTPUT"
 
@@ -142,23 +191,21 @@ jobs:
           node -e '
             const fs = require("fs");
             
-            let globalState = { users: {}, processed_ranges: {} };
+            let globalState = { users: {}, zone_progress: {} };
             if (fs.existsSync("global-state.json")) {
-              globalState = JSON.parse(fs.readFileSync("global-state.json", "utf8"));
+              try { globalState = JSON.parse(fs.readFileSync("global-state.json", "utf8")); } catch(e) {}
+              if (!globalState.zone_progress) globalState.zone_progress = {};
+              if (!globalState.users) globalState.users = {};
             }
             
-            // Mathematical function to compress overlapping or adjacent ranges
             function mergeRanges(ranges1, ranges2) {
               const combined = [...(ranges1 || []), ...(ranges2 || [])];
               if (combined.length === 0) return [];
-              
-              combined.sort((a, b) => a[0] - b[0]); // Sort by starting X
+              combined.sort((a, b) => a[0] - b[0]);
               const merged = [combined[0]];
-              
               for (let i = 1; i < combined.length; i++) {
                 const last = merged[merged.length - 1];
                 const current = combined[i];
-                // If they touch or overlap (e.g., [0,5] and [6,10] OR [0,5] and [3,8])
                 if (current[0] <= last[1] + 1) {
                   last[1] = Math.max(last[1], current[1]);
                 } else {
@@ -171,21 +218,40 @@ jobs:
             const files = fs.existsSync("local-results") ? fs.readdirSync("local-results").filter(f => f.endsWith(".json")) : [];
             for (const file of files) {
               const localData = JSON.parse(fs.readFileSync(`local-results/${file}`, "utf8"));
-              
-              // 1. Merge the mathematical ranges
-              if (localData.processed_ranges) {
-                for (const [y, rowRanges] of Object.entries(localData.processed_ranges)) {
-                  globalState.processed_ranges[y] = mergeRanges(globalState.processed_ranges[y], rowRanges);
+              const zone = localData.zone;
+              if (!zone || zone === "DONE") continue;
+
+              if (!globalState.zone_progress[zone]) {
+                globalState.zone_progress[zone] = { level: 1, scanned: 0, ranges: {} };
+              }
+              const zp = globalState.zone_progress[zone];
+
+              // Merge ranges ONLY if the local result matches the region current level securely
+              if (localData.level === zp.level) {
+                if (localData.ranges) {
+                  for (const [y, rowRanges] of Object.entries(localData.ranges)) {
+                    zp.ranges[y] = mergeRanges(zp.ranges[y], rowRanges);
+                  }
+                }
+                zp.scanned += (localData.scanned_count || 0);
+
+                if (localData.level_complete) {
+                  zp.level += 1;
+                  zp.ranges = {}; // Reset processed pixels for the new level
+                  zp.scanned = 0;
                 }
               }
 
-              // 2. Merge user counts
+              // Merge users grouped by regions
               if (localData.users) {
                 for (const [key, u] of Object.entries(localData.users)) {
                   if (!globalState.users[key]) {
-                    globalState.users[key] = { username: u.username, discord: u.discord, allianceName: u.allianceName, pixels_painted: 0 };
+                    globalState.users[key] = { username: u.username, discord: u.discord, allianceName: u.allianceName, pixels_painted: 0, regions: {} };
                   }
                   globalState.users[key].pixels_painted += u.pixels_painted;
+                  
+                  if (!globalState.users[key].regions) globalState.users[key].regions = {};
+                  globalState.users[key].regions[zone] = (globalState.users[key].regions[zone] || 0) + u.pixels_painted;
                 }
               }
             }
@@ -194,13 +260,24 @@ jobs:
 
             const sortedUsers = Object.values(globalState.users).sort((a, b) => b.pixels_painted - a.pixels_painted);
             
-            const csvLines = ["Wplace Username,Discord Username,Alliance,Pixels Painted"];
+            const regionCsvLines = ["Region,Wplace Username,Discord Username,Alliance,Pixels Painted in Region"];
+            const totalCsvLines = ["Wplace Username,Discord Username,Alliance,Total Pixels Painted"];
+            
             for (const u of sortedUsers) {
-              const safeName = `"${String(u.username || "").replace(/"/g, '""')}"`;
-              const safeAlliance = `"${String(u.allianceName || "").replace(/"/g, '""')}"`;
-              csvLines.push(`${safeName},${u.discord || ""},${safeAlliance},${u.pixels_painted}`);
+              const safeName = `"${String(u.username || "").replace(/"/g, "\"" + "\"")}"`;
+              const safeAlliance = `"${String(u.allianceName || "").replace(/"/g, "\"" + "\"")}"`;
+              
+              totalCsvLines.push(`${safeName},${u.discord || ""},${safeAlliance},${u.pixels_painted}`);
+              
+              if (u.regions) {
+                for (const [reg, count] of Object.entries(u.regions)) {
+                  regionCsvLines.push(`"${reg}",${safeName},${u.discord || ""},${safeAlliance},${count}`);
+                }
+              }
             }
-            fs.writeFileSync("Final-Merged-Results.csv", csvLines.join("\n"));
+            
+            fs.writeFileSync("Final-Merged-Results.csv", totalCsvLines.join("\n"));
+            fs.writeFileSync("Final-Merged-Results-By-Region.csv", regionCsvLines.join("\n"));
             fs.writeFileSync("Final-Merged-Results.json", JSON.stringify(sortedUsers, null, 2));
           '
 
@@ -216,6 +293,7 @@ jobs:
           name: Final-Merged-Results
           path: |
             Final-Merged-Results.csv
+            Final-Merged-Results-By-Region.csv
             Final-Merged-Results.json
             global-state.json
           retention-days: 90
