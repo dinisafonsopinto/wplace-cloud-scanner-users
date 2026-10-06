@@ -8,6 +8,9 @@ on:
       CONCURRENT_RUNNERS:
         type: number
         default: 12
+      RUN_DURATION_MINS:
+        type: number
+        default: 339
 
 # ==========================================
 # ⚙️ EDIT YOUR SCRAPER SETTINGS HERE ⚙️
@@ -18,6 +21,7 @@ env:
   TARGET_END_X: '564999'
   TARGET_END_Y: '789999'
   CONCURRENT_RUNNERS: ${{ inputs.CONCURRENT_RUNNERS || vars.CONCURRENT_RUNNERS || 10 }}
+  RUN_DURATION_MINS: ${{ inputs.RUN_DURATION_MINS || vars.RUN_DURATION_MINS || 340 }}
 # ==========================================
 
 jobs:
@@ -148,7 +152,7 @@ jobs:
           END_X: ${{ matrix.end_x }}
           END_Y: ${{ matrix.end_y }}
           ZONE_NAME: ${{ matrix.zone }}
-          RUN_DURATION_MINS: '342'
+          RUN_DURATION_MINS: ${{ env.RUN_DURATION_MINS || 341 }}
           TARGET_INTERVAL: '230'
           MIN_FLOOR: '203'
         run: node users.js
