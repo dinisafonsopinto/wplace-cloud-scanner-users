@@ -12,6 +12,10 @@ on:
         type: number
         default: 339
 
+concurrency:
+  group: wplace-scraper-queue
+  cancel-in-progress: false
+
 # ==========================================
 # ⚙️ EDIT YOUR SCRAPER SETTINGS HERE ⚙️
 # ==========================================
