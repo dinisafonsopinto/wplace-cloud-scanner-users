@@ -231,17 +231,15 @@ jobs:
               }
               const zp = globalState.zone_progress[zone];
 
-              // 1. If the runner finished any levels, advance the global state accordingly
               if (localData.completed_levels && localData.completed_levels.length > 0) {
                 const maxCompleted = Math.max(...localData.completed_levels);
                 if (maxCompleted >= zp.level) {
                   zp.level = maxCompleted + 1;
-                  zp.ranges = {}; // Dump old level processed pixels
+                  zp.ranges = {};
                   zp.scanned = 0;
                 }
               }
 
-              // 2. Add mid-level progress for whatever level the runner stopped on
               if (localData.current_level === zp.level) {
                 if (localData.ranges) {
                   for (const [y, rowRanges] of Object.entries(localData.ranges)) {
@@ -251,7 +249,6 @@ jobs:
                 zp.scanned += (localData.scanned_count || 0);
               }
 
-              // 3. Merge discovered users (users accumulate safely across all levels)
               if (localData.users) {
                 for (const [key, u] of Object.entries(localData.users)) {
                   if (!globalState.users[key]) {
@@ -288,6 +285,68 @@ jobs:
             fs.writeFileSync("Final-Merged-Results.csv", totalCsvLines.join("\n"));
             fs.writeFileSync("Final-Merged-Results-By-Region.csv", regionCsvLines.join("\n"));
             fs.writeFileSync("Final-Merged-Results.json", JSON.stringify(sortedUsers, null, 2));
+          '
+
+      - name: Upload to Google Sheets
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: |
+          npm install googleapis csv-parse
+          node -e '
+            const fs = require("fs");
+            const { google } = require("googleapis");
+            const { parse } = require("csv-parse/sync");
+
+            async function upload() {
+              if (!process.env.GOOGLE_CREDENTIALS || !process.env.SPREADSHEET_ID) {
+                console.log("Missing Google Secrets. Skipping upload.");
+                return;
+              }
+
+              const auth = new google.auth.GoogleAuth({
+                credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+                scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+              });
+              const sheets = google.sheets({ version: "v4", auth });
+              
+              console.log("Uploading Region CSV...");
+              const regionCsv = fs.readFileSync("Final-Merged-Results-By-Region.csv", "utf8");
+              const regionData = parse(regionCsv);
+              
+              await sheets.spreadsheets.values.clear({
+                spreadsheetId: process.env.SPREADSHEET_ID,
+                range: "Regions!A:E"
+              });
+              await sheets.spreadsheets.values.update({
+                spreadsheetId: process.env.SPREADSHEET_ID,
+                range: "Regions!A1",
+                valueInputOption: "USER_ENTERED",
+                requestBody: { values: regionData }
+              });
+              
+              console.log("Uploading Totals CSV...");
+              const totalCsv = fs.readFileSync("Final-Merged-Results.csv", "utf8");
+              const totalData = parse(totalCsv);
+              
+              await sheets.spreadsheets.values.clear({
+                spreadsheetId: process.env.SPREADSHEET_ID,
+                range: "Totals!A:D"
+              });
+              await sheets.spreadsheets.values.update({
+                spreadsheetId: process.env.SPREADSHEET_ID,
+                range: "Totals!A1",
+                valueInputOption: "USER_ENTERED",
+                requestBody: { values: totalData }
+              });
+              
+              console.log("Successfully uploaded both files to Google Sheets!");
+            }
+            
+            upload().catch(err => {
+              console.error("Google Sheets Upload Failed:", err);
+              process.exit(1);
+            });
           '
 
       - name: Save Global State Cache
