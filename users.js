@@ -39,6 +39,16 @@ function log(msg, type = 'info') {
   else console.log(`${prefix} ℹ️ ${msg}`);
 }
 
+let tableHasHeader = false;
+
+function logTable(logLine) {
+  if (!tableHasHeader) {
+    log(`- Scanned - | - Skipped - | - Total - | - Level -`);
+    tableHasHeader = true;
+  }
+  log(logLine);
+}
+
 function getCoords(absX, absY) {
   return {
     tileX: Math.floor(absX / TILE_SIZE),
@@ -185,8 +195,6 @@ async function run() {
   const startTileY = Math.floor(minY / TILE_SIZE);
   const endTileY = Math.floor(maxY / TILE_SIZE);
 
-  log(`- Scanned - | - Skipped - | - Total - | - Level -`)
-
   while (currentLevel <= 8 && !isShuttingDown) {
     let levelFinishedCompletely = true;
     
@@ -262,7 +270,7 @@ async function run() {
                 }
 
                 if (newPixelsScanned % 100 === 0) {
-                  log(`${newPixelsScanned.toString().padStart(12, ' ')}|${skippedPixels.toString().padStart(13, ' ')}|${totalPixels.toString().padStart(11, ' ')}|${currentLevel.toString().padStart(10, ' ')}`);
+                  logTable(`${newPixelsScanned.toString().padStart(12, ' ')}|${skippedPixels.toString().padStart(13, ' ')}|${totalPixels.toString().padStart(11, ' ')}|${currentLevel.toString().padStart(10, ' ')}`);
                   fs.writeFileSync(LOCAL_RESULTS_FILE, JSON.stringify(localDiscoveries));
                 }
 
