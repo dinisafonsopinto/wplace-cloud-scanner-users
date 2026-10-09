@@ -26,8 +26,8 @@ env:
   TARGET_END_Y: '789999'
   CONCURRENT_RUNNERS: ${{ inputs.CONCURRENT_RUNNERS || vars.CONCURRENT_RUNNERS || 10 }}
   RUN_DURATION_MINS: ${{ inputs.RUN_DURATION_MINS || vars.RUN_DURATION_MINS || 340 }}
-  PRIORITY_QUEUE: ${{ vars.PRIORITY_QUEUE || [] }}
-  POSTERIORITY_QUEUE: ${{ vars.POSTERIORITY_QUEUE || [] }}
+  PRIORITY_QUEUE: ${{ vars.PRIORITY_QUEUE || '' }}
+  POSTERIORITY_QUEUE: ${{ vars.POSTERIORITY_QUEUE || '' }}
 # ==========================================
 
 jobs:
@@ -230,99 +230,118 @@ jobs:
           merge-multiple: true
 
       - name: Merge States and Generate CSV
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
           node -e '
             const fs = require("fs");
-            
-            let globalState = { users: {}, zone_progress: {} };
-            if (fs.existsSync("global-state.json")) {
-              try { globalState = JSON.parse(fs.readFileSync("global-state.json", "utf8")); } catch(e) {}
-              if (!globalState.zone_progress) globalState.zone_progress = {};
-              if (!globalState.users) globalState.users = {};
-            }
-            
-            function mergeRanges(ranges1, ranges2) {
-              const combined = [...(ranges1 || []), ...(ranges2 || [])];
-              if (combined.length === 0) return [];
-              combined.sort((a, b) => a[0] - b[0]);
-              const merged = [combined[0]];
-              for (let i = 1; i < combined.length; i++) {
-                const last = merged[merged.length - 1];
-                const current = combined[i];
-                if (current[0] <= last[1] + 1) {
-                  last[1] = Math.max(last[1], current[1]);
-                } else {
-                  merged.push(current);
-                }
+            const { createWriteStream } = require("fs");
+            const { pipeline } = require("stream/promises");
+            const { Readable } = require("stream");
+
+            async function main() {
+              let globalState = { users: {}, zone_progress: {} };
+              if (fs.existsSync("global-state.json")) {
+                try { globalState = JSON.parse(fs.readFileSync("global-state.json", "utf8")); } catch(e) {}
+                if (!globalState.zone_progress) globalState.zone_progress = {};
+                if (!globalState.users) globalState.users = {};
               }
-              return merged;
-            }
-
-            const files = fs.existsSync("local-results") ? fs.readdirSync("local-results").filter(f => f.endsWith(".json")) : [];
-            for (const file of files) {
-              const localData = JSON.parse(fs.readFileSync(`local-results/${file}`, "utf8"));
-              const zone = localData.zone;
-              if (!zone || zone === "DONE") continue;
-
-              if (!globalState.zone_progress[zone]) {
-                globalState.zone_progress[zone] = { level: 1, scanned: 0, ranges: {} };
-              }
-              const zp = globalState.zone_progress[zone];
-
-              if (localData.completed_levels && localData.completed_levels.length > 0) {
-                const maxCompleted = Math.max(...localData.completed_levels);
-                if (maxCompleted >= zp.level) {
-                  zp.level = maxCompleted + 1;
-                  zp.ranges = {};
-                  zp.scanned = 0;
-                }
-              }
-
-              if (localData.current_level === zp.level) {
-                if (localData.ranges) {
-                  for (const [y, rowRanges] of Object.entries(localData.ranges)) {
-                    zp.ranges[y] = mergeRanges(zp.ranges[y], rowRanges);
+              
+              function mergeRanges(ranges1, ranges2) {
+                const combined = [...(ranges1 || []), ...(ranges2 || [])];
+                if (combined.length === 0) return [];
+                combined.sort((a, b) => a[0] - b[0]);
+                const merged = [combined[0]];
+                for (let i = 1; i < combined.length; i++) {
+                  const last = merged[merged.length - 1];
+                  const current = combined[i];
+                  if (current[0] <= last[1] + 1) {
+                    last[1] = Math.max(last[1], current[1]);
+                  } else {
+                    merged.push(current);
                   }
                 }
-                zp.scanned += (localData.scanned_count || 0);
+                return merged;
               }
 
-              if (localData.users) {
-                for (const [key, u] of Object.entries(localData.users)) {
-                  if (!globalState.users[key]) {
-                    globalState.users[key] = { username: u.username, discord: u.discord, allianceName: u.allianceName, pixels_painted: 0, regions: {} };
+              const files = fs.existsSync("local-results") ? fs.readdirSync("local-results").filter(f => f.endsWith(".json")) : [];
+              for (const file of files) {
+                const localData = JSON.parse(fs.readFileSync(`local-results/${file}`, "utf8"));
+                const zone = localData.zone;
+                if (!zone || zone === "DONE") continue;
+
+                if (!globalState.zone_progress[zone]) {
+                  globalState.zone_progress[zone] = { level: 1, scanned: 0, ranges: {} };
+                }
+                const zp = globalState.zone_progress[zone];
+
+                if (localData.completed_levels && localData.completed_levels.length > 0) {
+                  const maxCompleted = Math.max(...localData.completed_levels);
+                  if (maxCompleted >= zp.level) {
+                    zp.level = maxCompleted + 1;
+                    zp.ranges = {};
+                    zp.scanned = 0;
                   }
-                  globalState.users[key].pixels_painted += u.pixels_painted;
-                  
-                  if (!globalState.users[key].regions) globalState.users[key].regions = {};
-                  globalState.users[key].regions[zone] = (globalState.users[key].regions[zone] || 0) + u.pixels_painted;
+                }
+
+                if (localData.current_level === zp.level) {
+                  if (localData.ranges) {
+                    for (const [y, rowRanges] of Object.entries(localData.ranges)) {
+                      zp.ranges[y] = mergeRanges(zp.ranges[y], rowRanges);
+                    }
+                  }
+                  zp.scanned += (localData.scanned_count || 0);
+                }
+
+                if (localData.users) {
+                  for (const [key, u] of Object.entries(localData.users)) {
+                    if (!globalState.users[key]) {
+                      globalState.users[key] = { username: u.username, discord: u.discord, allianceName: u.allianceName, pixels_painted: 0, regions: {} };
+                    }
+                    globalState.users[key].pixels_painted += u.pixels_painted;
+                    
+                    if (!globalState.users[key].regions) globalState.users[key].regions = {};
+                    globalState.users[key].regions[zone] = (globalState.users[key].regions[zone] || 0) + u.pixels_painted;
+                  }
                 }
               }
-            }
 
-            fs.writeFileSync("global-state.json", JSON.stringify(globalState));
+              // Stream writing global-state.json to prevent string length overflows
+              async function* streamGlobalState() {
+                yield "{\n";
+                yield `  "zone_progress": ${JSON.stringify(globalState.zone_progress)},\n`;
+                yield `  "users": ${JSON.stringify(globalState.users)}\n`;
+                yield "}\n";
+              }
+              await pipeline(Readable.from(streamGlobalState()), createWriteStream("global-state.json"));
 
-            const sortedUsers = Object.values(globalState.users).sort((a, b) => b.pixels_painted - a.pixels_painted);
-            
-            const regionCsvLines = ["Region,Wplace Username,Discord Username,Alliance,Pixels Painted in Region"];
-            const totalCsvLines = ["Wplace Username,Discord Username,Alliance,Total Pixels Painted"];
-            
-            for (const u of sortedUsers) {
-              const safeName = `"${String(u.username || "").replace(/"/g, "\"" + "\"")}"`;
-              const safeAlliance = `"${String(u.allianceName || "").replace(/"/g, "\"" + "\"")}"`;
+              const sortedUsers = Object.values(globalState.users).sort((a, b) => b.pixels_painted - a.pixels_painted);
               
-              totalCsvLines.push(`${safeName},${u.discord || ""},${safeAlliance},${u.pixels_painted}`);
+              const regionCsvLines = ["Region,Wplace Username,Discord Username,Alliance,Pixels Painted in Region"];
+              const totalCsvLines = ["Wplace Username,Discord Username,Alliance,Total Pixels Painted"];
               
-              if (u.regions) {
-                for (const [reg, count] of Object.entries(u.regions)) {
-                  regionCsvLines.push(`"${reg}",${safeName},${u.discord || ""},${safeAlliance},${count}`);
+              for (const u of sortedUsers) {
+                const safeName = `"${String(u.username || "").replace(/"/g, "\"\"")}"`;
+                const safeAlliance = `"${String(u.allianceName || "").replace(/"/g, "\"\"")}"`;
+                
+                totalCsvLines.push(`${safeName},${u.discord || ""},${safeAlliance},${u.pixels_painted}`);
+                
+                if (u.regions) {
+                  for (const [reg, count] of Object.entries(u.regions)) {
+                    regionCsvLines.push(`"${reg}",${safeName},${u.discord || ""},${safeAlliance},${count}`);
+                  }
                 }
               }
+              
+              fs.writeFileSync("Final-Merged-Results.csv", totalCsvLines.join("\n"));
+              fs.writeFileSync("Final-Merged-Results-By-Region.csv", regionCsvLines.join("\n"));
+              fs.writeFileSync("Final-Merged-Results.json", JSON.stringify(sortedUsers, null, 2));
             }
-            
-            fs.writeFileSync("Final-Merged-Results.csv", totalCsvLines.join("\n"));
-            fs.writeFileSync("Final-Merged-Results-By-Region.csv", regionCsvLines.join("\n"));
-            fs.writeFileSync("Final-Merged-Results.json", JSON.stringify(sortedUsers, null, 2));
+
+            main().catch(err => {
+              console.error(err);
+              process.exit(1);
+            });
           '
 
       - name: Upload to Google Sheets
