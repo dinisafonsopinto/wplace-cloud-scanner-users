@@ -27,7 +27,7 @@ env:
   CONCURRENT_RUNNERS: ${{ inputs.CONCURRENT_RUNNERS || vars.CONCURRENT_RUNNERS || 10 }}
   RUN_DURATION_MINS: ${{ inputs.RUN_DURATION_MINS || vars.RUN_DURATION_MINS || 340 }}
   PRIORITY_QUEUE: ${{ vars.PRIORITY_QUEUE || [] }}
-  POSTERIORITY_QUEUE: ${{ vars.POSTERIORITY_QUEUE }}
+  POSTERIORITY_QUEUE: ${{ vars.POSTERIORITY_QUEUE || [] }}
 # ==========================================
 
 jobs:
