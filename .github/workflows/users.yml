@@ -26,6 +26,8 @@ env:
   TARGET_END_Y: '789999'
   CONCURRENT_RUNNERS: ${{ inputs.CONCURRENT_RUNNERS || vars.CONCURRENT_RUNNERS || 10 }}
   RUN_DURATION_MINS: ${{ inputs.RUN_DURATION_MINS || vars.RUN_DURATION_MINS || 340 }}
+  PRIORITY_QUEUE: ${{ vars.PRIORITY_QUEUE || [] }}
+  POSTERIORITY_QUEUE: ${{ vars.POSTERIORITY_QUEUE }}
 # ==========================================
 
 jobs:
@@ -59,6 +61,19 @@ jobs:
             const endY = parseInt(process.env.END_Y, 10);
             const runners = parseInt(process.env.CONCURRENT_RUNNERS, 10) || 5;
 
+            // Helper to parse strings or JSON arrays
+            function parseQueue(val) {
+              if (!val) return new Set();
+              try {
+                const parsed = JSON.parse(val);
+                if (Array.isArray(parsed)) return new Set(parsed.map(s => String(s).trim()));
+              } catch (e) {}
+              return new Set(val.split(",").map(s => s.trim()).filter(Boolean));
+            }
+
+            const prioritySet = parseQueue(process.env.PRIORITY_QUEUE);
+            const posterioritySet = parseQueue(process.env.POSTERIORITY_QUEUE);
+
             const grid = [
               [null,   null,    null,    "GR7",   "GR8",  "GS301", null,    null,    null,   null    ],
               [null,   null,    null,    "GR10",  "GR11", "LAN1 ", "GS307", null,    null,   null    ],
@@ -76,8 +91,8 @@ jobs:
               ["EVA2", "LOU1",  "LOU2",  "LOU3",  null,   null,    null,    null,    null,   null    ]
             ];
 
-            const cols = 9;
-            const rows = 14;
+            const cols = grid.length;
+            const rows = grid[0].length;
             const width = Math.floor((endX - startX + 1) / cols);
             const height = Math.floor((endY - startY + 1) / rows);
             
@@ -102,12 +117,35 @@ jobs:
                 if (zp.level > 8) continue;
                 
                 const score = (zp.level * 1000000) + zp.scanned;
-                
-                regions.push({ start_x: sx.toString(), start_y: sy.toString(), end_x: ex.toString(), end_y: ey.toString(), zone: zone, score: score });
+
+                const isPriority = prioritySet.has(zone) || prioritySet.has(zone.trim());
+                const isPosteriority = posterioritySet.has(zone) || posterioritySet.has(zone.trim());
+                // Bucket priority: 0 = Priority, 1 = Default, 2 = Posteriority
+                let queueBucket = 1;
+                if (isPriority) {
+                  queueBucket = 0;
+                } else if (isPosteriority) {
+                  queueBucket = 2;
+                }
+
+                regions.push({
+                  start_x: sx.toString(),
+                  start_y: sy.toString(),
+                  end_x: ex.toString(),
+                  end_y: ey.toString(),
+                  zone: zone,
+                  queueBucket: queueBucket,
+                  score: score
+                });                
               }
             }
             
-            regions.sort((a, b) => a.score - b.score);
+            regions.sort((a, b) => {
+              if (a.queueBucket !== b.queueBucket) {
+                return a.queueBucket - b.queueBucket;
+              }
+              return a.score - b.score;
+            });
             const topN = regions.slice(0, runners);
             
             if (topN.length === 0) {
