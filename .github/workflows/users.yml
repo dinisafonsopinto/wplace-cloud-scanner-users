@@ -311,22 +311,22 @@ jobs:
                 yield "{\n";
 
                 // 1. Stream zone_progress key by key
-                yield '  "zone_progress": {\n';
+                yield `  "zone_progress": {\n`;
                 const zones = Object.keys(globalState.zone_progress);
                 for (let i = 0; i < zones.length; i++) {
                   const z = zones[i];
                   yield `    ${JSON.stringify(z)}: ${JSON.stringify(globalState.zone_progress[z])}${i < zones.length - 1 ? "," : ""}\n`;
                 }
-                yield '  },\n';
+                yield `  },\n`;
 
                 // 2. Stream users key by key
-                yield '  "users": {\n';
+                yield `  "users": {\n`;
                 const userKeys = Object.keys(globalState.users);
                 for (let i = 0; i < userKeys.length; i++) {
                   const u = userKeys[i];
                   yield `    ${JSON.stringify(u)}: ${JSON.stringify(globalState.users[u])}${i < userKeys.length - 1 ? "," : ""}\n`;
                 }
-                yield '  }\n';
+                yield `  }\n`;
 
                 yield "}\n";
               }
